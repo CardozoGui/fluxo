@@ -28,6 +28,41 @@ st.set_page_config(
 )
 
 
+def exigir_login() -> None:
+    """Protege o app com login OIDC e uma lista explícita de e-mails autorizados."""
+    if "auth" not in st.secrets:
+        st.title("Acesso ao fluxo de caixa")
+        st.error(
+            "A autenticação ainda não foi configurada. Defina as credenciais OIDC "
+            "em .streamlit/secrets.toml (ou nos Secrets do serviço de hospedagem)."
+        )
+        st.stop()
+
+    emails_autorizados = {
+        email.strip().casefold()
+        for email in st.secrets.get("access", {}).get("allowed_emails", [])
+        if email.strip()
+    }
+    if not emails_autorizados:
+        st.title("Acesso ao fluxo de caixa")
+        st.error("Nenhum e-mail autorizado foi configurado. O acesso está bloqueado.")
+        st.stop()
+
+    if not st.user.is_logged_in:
+        st.title("Acesso ao fluxo de caixa")
+        st.caption("Entre com a conta autorizada para acessar os dados financeiros.")
+        if st.button("Entrar com Google", type="primary", icon=":material/login:"):
+            st.login()
+        st.stop()
+
+    email = str(st.user.email).strip().casefold()
+    if email not in emails_autorizados:
+        st.title("Acesso não autorizado")
+        st.error("Esta conta não está autorizada a acessar o fluxo de caixa.")
+        st.button("Sair", on_click=st.logout)
+        st.stop()
+
+
 def criar_tabela_transacoes(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -520,6 +555,8 @@ def invalidar_dados() -> None:
     carregar_dados.clear()
 
 
+exigir_login()
+
 init_db()
 df = carregar_dados()
 df_recorrencias = carregar_recorrencias()
@@ -527,10 +564,35 @@ categorias_disponiveis = carregar_categorias()
 saldo_base, data_base = carregar_configuracoes()
 periodo_padrao = periodo_inicial(df)
 
+aba_visao, aba_movimentacoes, aba_cadastros, aba_relatorios = st.tabs(
+    ["Visão geral", "Movimentações", "Cadastros", "Relatórios"]
+)
+
 with st.sidebar:
     st.title("Fluxo de caixa", anchor=False)
     st.caption("Controle financeiro")
+    st.caption(f"Acesso: {st.user.email}")
+    st.button("Sair", on_click=st.logout, width="stretch")
 
+    st.subheader("Filtros", divider="gray")
+    if "filtro_periodo" not in st.session_state:
+        st.session_state["filtro_periodo"] = periodo_padrao
+    periodo = st.date_input(
+        "Período",
+        key="filtro_periodo",
+        help="Os indicadores e gráficos consideram o período selecionado.",
+    )
+    categorias_selecionadas = st.multiselect(
+        "Categorias",
+        options=categorias_disponiveis,
+        default=categorias_disponiveis,
+    )
+    granularidade = st.selectbox(
+        "Agrupar gráfico por", ["Dia", "Semana", "Mês"], index=2
+    )
+    st.caption("Os filtros atualizam o painel automaticamente.")
+
+with aba_cadastros:
     st.subheader("Nova transação", divider="gray")
     with st.form("form_transacao", clear_on_submit=True):
         data_transacao = st.date_input("Data", value=date.today())
@@ -762,32 +824,8 @@ with st.sidebar:
                     )
                 st.rerun()
 
-    st.subheader("Filtros", divider="gray")
-    if "filtro_periodo" not in st.session_state:
-        st.session_state["filtro_periodo"] = periodo_padrao
-    periodo = st.date_input(
-        "Período",
-        key="filtro_periodo",
-        help="Os indicadores e gráficos consideram o período selecionado.",
-    )
-    categorias_selecionadas = st.multiselect(
-        "Categorias",
-        options=categorias_disponiveis,
-        default=categorias_disponiveis,
-    )
-    granularidade = st.selectbox(
-        "Agrupar gráfico por", ["Dia", "Semana", "Mês"], index=2
-    )
-    st.caption("Os filtros atualizam o painel automaticamente.")
 
-pagina = st.segmented_control(
-    "Página",
-    options=["Visão geral", "Relatórios"],
-    default="Visão geral",
-    key="pagina_principal",
-)
-
-if pagina == "Relatórios":
+with aba_relatorios:
     st.title("Relatórios", icon=":material/assessment:")
     st.caption(
         "Consulte o desempenho mensal e anual e acompanhe projeções de caixa."
@@ -1309,418 +1347,419 @@ if pagina == "Relatórios":
         "Os relatórios se baseiam nas categorias selecionadas na barra lateral. "
         "As projeções consideram todas as categorias."
     )
-    st.stop()
 
-if isinstance(periodo, (tuple, list)) and len(periodo) == 2:
-    data_inicio, data_fim = periodo
-else:
-    data_inicio = data_fim = periodo
+with aba_visao:
+    if isinstance(periodo, (tuple, list)) and len(periodo) == 2:
+        data_inicio, data_fim = periodo
+    else:
+        data_inicio = data_fim = periodo
 
-if data_inicio > data_fim:
-    data_inicio, data_fim = data_fim, data_inicio
+    if data_inicio > data_fim:
+        data_inicio, data_fim = data_fim, data_inicio
 
-df_periodo = df[
-    df["data"].notna()
-    & (df["data"].dt.date >= data_inicio)
-    & (df["data"].dt.date <= data_fim)
-    & df["categoria"].isin(categorias_selecionadas)
-].copy()
-ocorrencias_periodo = montar_ocorrencias(
-    df_recorrencias,
-    data_inicio,
-    data_fim,
-    max(data_inicio, date.today()),
-    df,
-)
-ocorrencias_periodo = ocorrencias_periodo[
-    ocorrencias_periodo["categoria"].isin(categorias_selecionadas)
-]
-
-realizadas = df_periodo[df_periodo["status"] == "Realizada"]
-receitas_realizadas = int(
-    realizadas.loc[realizadas["tipo"] == "Receita", "valor_centavos"].sum()
-)
-despesas_realizadas = int(
-    realizadas.loc[realizadas["tipo"] == "Despesa", "valor_centavos"].sum()
-)
-saldo_realizado = receitas_realizadas - despesas_realizadas
-
-inicio_anterior, fim_anterior = proximo_periodo(data_inicio, data_fim)
-anteriores = df[
-    (df["data"].dt.date >= inicio_anterior)
-    & (df["data"].dt.date <= fim_anterior)
-    & (df["status"] == "Realizada")
-    & df["categoria"].isin(categorias_selecionadas)
-]
-receitas_anteriores = int(
-    anteriores.loc[anteriores["tipo"] == "Receita", "valor_centavos"].sum()
-)
-despesas_anteriores = int(
-    anteriores.loc[anteriores["tipo"] == "Despesa", "valor_centavos"].sum()
-)
-saldo_anterior = receitas_anteriores - despesas_anteriores
-saldo_fim_projetado = saldo_projetado(
-    df, df_recorrencias, saldo_base, data_base, data_fim
-)
-
-st.title("Visão geral", icon=":material/analytics:")
-st.caption(
-    "Acompanhe o realizado, as previsões e a evolução do caixa. "
-    "O saldo projetado considera todas as categorias."
-)
-
-metricas = st.columns(5)
-metricas[0].metric(
-    "Receitas realizadas",
-    formatar_moeda(receitas_realizadas),
-    formatar_variacao(receitas_realizadas, receitas_anteriores),
-    delta_description=(
-        "vs. período anterior"
-        if receitas_anteriores
-        else "sem base no período anterior"
-    ),
-    border=True,
-)
-metricas[1].metric(
-    "Despesas realizadas",
-    formatar_moeda(despesas_realizadas),
-    formatar_variacao(despesas_realizadas, despesas_anteriores),
-    delta_description=(
-        "vs. período anterior"
-        if despesas_anteriores
-        else "sem base no período anterior"
-    ),
-    delta_color="inverse",
-    border=True,
-)
-metricas[2].metric(
-    "Saldo realizado",
-    formatar_moeda(saldo_realizado),
-    formatar_variacao(saldo_realizado, saldo_anterior),
-    delta_description=(
-        "vs. período anterior" if saldo_anterior else "sem base no período anterior"
-    ),
-    border=True,
-)
-metricas[3].metric(
-    "Saldo projetado no fim",
-    formatar_moeda(saldo_fim_projetado) if saldo_fim_projetado is not None else "Sem base",
-    border=True,
-)
-metricas[4].metric(
-    "Lançamentos registrados",
-    f"{len(df_periodo):,}".replace(",", "."),
-    border=True,
-)
-if saldo_fim_projetado is None:
-    st.caption(
-        f"Saldo projetado indisponível: o período termina antes da data-base "
-        f"({data_base:%d/%m/%Y}). Ajuste o saldo inicial para consultar períodos anteriores."
-    )
-else:
-    st.caption(
-        f"Projeção baseada no saldo de {formatar_moeda(saldo_base)} em "
-        f"{data_base:%d/%m/%Y}, considerando todas as categorias até "
-        f"{data_fim:%d/%m/%Y}."
-    )
-    if receitas_anteriores == 0 or despesas_anteriores == 0:
-        st.caption(
-            "A comparação usa transações realizadas no período anterior de mesma duração."
-        )
-
-movimentos_grafico = pd.concat(
-    [
-        df_periodo[["data", "categoria", "valor_centavos", "valor", "tipo", "status"]],
-        ocorrencias_periodo[["data", "categoria", "valor_centavos", "valor", "tipo", "status"]],
-    ],
-    ignore_index=True,
-)
-movimentos_grafico["data"] = pd.to_datetime(movimentos_grafico["data"], errors="raise")
-
-st.space("small")
-graf_coluna, categoria_coluna = st.columns(2)
-with graf_coluna:
-    with st.container(border=True):
-        st.subheader("Receitas e despesas", anchor=False)
-        if movimentos_grafico.empty:
-            st.caption("Não há movimentações para o período e as categorias selecionadas.")
-        else:
-            chave_frequencia = {"Dia": "D", "Semana": "W-SUN", "Mês": "MS"}[
-                granularidade
-            ]
-            inicio_grafico = pd.Timestamp(data_inicio)
-            fim_grafico = pd.Timestamp(data_fim)
-            if granularidade in {"Semana", "Mês"}:
-                datas_grafico = pd.period_range(
-                    inicio_grafico,
-                    fim_grafico,
-                    freq={"Semana": "W-SUN", "Mês": "M"}[granularidade],
-                ).start_time
-            else:
-                datas_grafico = pd.date_range(
-                    inicio_grafico, fim_grafico, freq=chave_frequencia
-                )
-            agrupado = (
-                movimentos_grafico.assign(
-                    periodo=movimentos_grafico["data"].dt.to_period(
-                        {"Dia": "D", "Semana": "W-SUN", "Mês": "M"}[granularidade]
-                    )
-                )
-                .groupby(["periodo", "tipo", "status"])["valor_centavos"]
-                .sum()
-                .unstack(["tipo", "status"], fill_value=0)
-            )
-            periodos = datas_grafico.to_period(
-                {"Dia": "D", "Semana": "W-SUN", "Mês": "M"}[granularidade]
-            )
-            colunas_grafico = pd.MultiIndex.from_product(
-                [TIPOS, STATUS], names=["tipo", "status"]
-            )
-            agrupado = agrupado.reindex(index=periodos, columns=colunas_grafico, fill_value=0)
-            agrupado.columns = [
-                f"{tipo} ({situacao.lower()})" for tipo, situacao in agrupado.columns
-            ]
-            agrupado = agrupado / 100
-            rotulos = {
-                "Dia": "%d/%m",
-                "Semana": "sem. %d/%m",
-                "Mês": "%m/%Y",
-            }
-            agrupado.index = datas_grafico.strftime(rotulos[granularidade])
-            agrupado.index.name = granularidade
-            st.bar_chart(
-                agrupado.reset_index(),
-                x=granularidade,
-                y=list(agrupado.columns),
-                stack=False,
-                alt="Receitas e despesas realizadas e previstas no período",
-            )
-
-with categoria_coluna:
-    with st.container(border=True):
-        st.subheader("Despesas por categoria", anchor=False)
-        st.caption("Inclui movimentações previstas e ocorrências recorrentes.")
-        despesas_categoria = (
-            movimentos_grafico[movimentos_grafico["tipo"] == "Despesa"]
-            .groupby("categoria", as_index=False)["valor_centavos"]
-            .sum()
-            .sort_values("valor_centavos", ascending=False)
-        )
-        if despesas_categoria.empty:
-            st.caption("Nenhuma despesa no período selecionado.")
-        else:
-            despesas_categoria["valor"] = despesas_categoria["valor_centavos"] / 100
-            st.bar_chart(
-                despesas_categoria,
-                x="categoria",
-                y="valor",
-                horizontal=True,
-                alt="Despesas realizadas e previstas agrupadas por categoria",
-            )
-
-st.subheader("Movimentações", icon=":material/receipt_long:")
-filtros_coluna, exportar_coluna, backup_coluna = st.columns(
-    [2, 1, 1], vertical_alignment="bottom"
-)
-with filtros_coluna:
-    tipos_selecionados = st.pills(
-        "Tipos exibidos",
-        options=TIPOS,
-        default=TIPOS,
-        selection_mode="multi",
-    )
-
-df_tabela = df_periodo[
-    df_periodo["tipo"].isin(tipos_selecionados or [])
-].copy()
-df_tabela = df_tabela.sort_values(["data", "id"], ascending=[False, False])
-df_exportacao = pd.concat(
-    [
-        df_tabela[
-            ["data", "descricao", "categoria", "valor_centavos", "tipo", "status"]
-        ],
-        ocorrencias_periodo[
-            ocorrencias_periodo["tipo"].isin(tipos_selecionados or [])
-        ][["data", "descricao", "categoria", "valor_centavos", "tipo", "status"]],
-    ],
-    ignore_index=True,
-).sort_values("data", ascending=False).rename(
-    columns={
-        "data": "Data",
-        "descricao": "Descrição",
-        "categoria": "Categoria",
-        "valor_centavos": "Valor (R$)",
-        "tipo": "Tipo",
-        "status": "Situação",
-    }
-)
-if not df_exportacao.empty:
-    df_exportacao["Data"] = pd.to_datetime(df_exportacao["Data"]).dt.strftime("%d/%m/%Y")
-    df_exportacao["Valor (R$)"] = df_exportacao["Valor (R$)"] / 100
-
-with exportar_coluna:
-    st.download_button(
-        "Exportar período",
-        data=df_exportacao.to_csv(index=False).encode("utf-8-sig"),
-        file_name="movimentacoes_fluxo_de_caixa.csv",
-        mime="text/csv",
-        icon=":material/download:",
-        width="stretch",
-        disabled=df_exportacao.empty,
-    )
-with backup_coluna:
-    st.download_button(
-        "Backup completo",
-        data=criar_backup(),
-        file_name=f"backup_fluxo_de_caixa_{date.today():%Y%m%d}.json",
-        mime="application/json",
-        icon=":material/backup:",
-        help="Inclui lançamentos, recorrências, categorias e saldo inicial.",
-        width="stretch",
-    )
-
-if df_tabela.empty:
-    st.info("Nenhuma movimentação encontrada com os filtros atuais.")
-else:
-    df_exibicao = df_tabela[
-        ["id", "data", "descricao", "categoria", "valor_centavos", "tipo", "status"]
+    df_periodo = df[
+        df["data"].notna()
+        & (df["data"].dt.date >= data_inicio)
+        & (df["data"].dt.date <= data_fim)
+        & df["categoria"].isin(categorias_selecionadas)
     ].copy()
-    df_exibicao["data"] = df_exibicao["data"].dt.strftime("%d/%m/%Y")
-    df_exibicao["valor_centavos"] = df_exibicao["valor_centavos"].map(
-        lambda valor_centavos: formatar_moeda(int(valor_centavos))
+    ocorrencias_periodo = montar_ocorrencias(
+        df_recorrencias,
+        data_inicio,
+        data_fim,
+        max(data_inicio, date.today()),
+        df,
     )
-    st.dataframe(
-        df_exibicao,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "id": st.column_config.NumberColumn("ID", help="Identificador da transação"),
+    ocorrencias_periodo = ocorrencias_periodo[
+        ocorrencias_periodo["categoria"].isin(categorias_selecionadas)
+    ]
+
+    realizadas = df_periodo[df_periodo["status"] == "Realizada"]
+    receitas_realizadas = int(
+        realizadas.loc[realizadas["tipo"] == "Receita", "valor_centavos"].sum()
+    )
+    despesas_realizadas = int(
+        realizadas.loc[realizadas["tipo"] == "Despesa", "valor_centavos"].sum()
+    )
+    saldo_realizado = receitas_realizadas - despesas_realizadas
+
+    inicio_anterior, fim_anterior = proximo_periodo(data_inicio, data_fim)
+    anteriores = df[
+        (df["data"].dt.date >= inicio_anterior)
+        & (df["data"].dt.date <= fim_anterior)
+        & (df["status"] == "Realizada")
+        & df["categoria"].isin(categorias_selecionadas)
+    ]
+    receitas_anteriores = int(
+        anteriores.loc[anteriores["tipo"] == "Receita", "valor_centavos"].sum()
+    )
+    despesas_anteriores = int(
+        anteriores.loc[anteriores["tipo"] == "Despesa", "valor_centavos"].sum()
+    )
+    saldo_anterior = receitas_anteriores - despesas_anteriores
+    saldo_fim_projetado = saldo_projetado(
+        df, df_recorrencias, saldo_base, data_base, data_fim
+    )
+
+    st.title("Visão geral", icon=":material/analytics:")
+    st.caption(
+        "Acompanhe o realizado, as previsões e a evolução do caixa. "
+        "O saldo projetado considera todas as categorias."
+    )
+
+    metricas = st.columns(5)
+    metricas[0].metric(
+        "Receitas realizadas",
+        formatar_moeda(receitas_realizadas),
+        formatar_variacao(receitas_realizadas, receitas_anteriores),
+        delta_description=(
+            "vs. período anterior"
+            if receitas_anteriores
+            else "sem base no período anterior"
+        ),
+        border=True,
+    )
+    metricas[1].metric(
+        "Despesas realizadas",
+        formatar_moeda(despesas_realizadas),
+        formatar_variacao(despesas_realizadas, despesas_anteriores),
+        delta_description=(
+            "vs. período anterior"
+            if despesas_anteriores
+            else "sem base no período anterior"
+        ),
+        delta_color="inverse",
+        border=True,
+    )
+    metricas[2].metric(
+        "Saldo realizado",
+        formatar_moeda(saldo_realizado),
+        formatar_variacao(saldo_realizado, saldo_anterior),
+        delta_description=(
+            "vs. período anterior" if saldo_anterior else "sem base no período anterior"
+        ),
+        border=True,
+    )
+    metricas[3].metric(
+        "Saldo projetado no fim",
+        formatar_moeda(saldo_fim_projetado) if saldo_fim_projetado is not None else "Sem base",
+        border=True,
+    )
+    metricas[4].metric(
+        "Lançamentos registrados",
+        f"{len(df_periodo):,}".replace(",", "."),
+        border=True,
+    )
+    if saldo_fim_projetado is None:
+        st.caption(
+            f"Saldo projetado indisponível: o período termina antes da data-base "
+            f"({data_base:%d/%m/%Y}). Ajuste o saldo inicial para consultar períodos anteriores."
+        )
+    else:
+        st.caption(
+            f"Projeção baseada no saldo de {formatar_moeda(saldo_base)} em "
+            f"{data_base:%d/%m/%Y}, considerando todas as categorias até "
+            f"{data_fim:%d/%m/%Y}."
+        )
+        if receitas_anteriores == 0 or despesas_anteriores == 0:
+            st.caption(
+                "A comparação usa transações realizadas no período anterior de mesma duração."
+            )
+
+    movimentos_grafico = pd.concat(
+        [
+            df_periodo[["data", "categoria", "valor_centavos", "valor", "tipo", "status"]],
+            ocorrencias_periodo[["data", "categoria", "valor_centavos", "valor", "tipo", "status"]],
+        ],
+        ignore_index=True,
+    )
+    movimentos_grafico["data"] = pd.to_datetime(movimentos_grafico["data"], errors="raise")
+
+    st.space("small")
+    graf_coluna, categoria_coluna = st.columns(2)
+    with graf_coluna:
+        with st.container(border=True):
+            st.subheader("Receitas e despesas", anchor=False)
+            if movimentos_grafico.empty:
+                st.caption("Não há movimentações para o período e as categorias selecionadas.")
+            else:
+                chave_frequencia = {"Dia": "D", "Semana": "W-SUN", "Mês": "MS"}[
+                    granularidade
+                ]
+                inicio_grafico = pd.Timestamp(data_inicio)
+                fim_grafico = pd.Timestamp(data_fim)
+                if granularidade in {"Semana", "Mês"}:
+                    datas_grafico = pd.period_range(
+                        inicio_grafico,
+                        fim_grafico,
+                        freq={"Semana": "W-SUN", "Mês": "M"}[granularidade],
+                    ).start_time
+                else:
+                    datas_grafico = pd.date_range(
+                        inicio_grafico, fim_grafico, freq=chave_frequencia
+                    )
+                agrupado = (
+                    movimentos_grafico.assign(
+                        periodo=movimentos_grafico["data"].dt.to_period(
+                            {"Dia": "D", "Semana": "W-SUN", "Mês": "M"}[granularidade]
+                        )
+                    )
+                    .groupby(["periodo", "tipo", "status"])["valor_centavos"]
+                    .sum()
+                    .unstack(["tipo", "status"], fill_value=0)
+                )
+                periodos = datas_grafico.to_period(
+                    {"Dia": "D", "Semana": "W-SUN", "Mês": "M"}[granularidade]
+                )
+                colunas_grafico = pd.MultiIndex.from_product(
+                    [TIPOS, STATUS], names=["tipo", "status"]
+                )
+                agrupado = agrupado.reindex(index=periodos, columns=colunas_grafico, fill_value=0)
+                agrupado.columns = [
+                    f"{tipo} ({situacao.lower()})" for tipo, situacao in agrupado.columns
+                ]
+                agrupado = agrupado / 100
+                rotulos = {
+                    "Dia": "%d/%m",
+                    "Semana": "sem. %d/%m",
+                    "Mês": "%m/%Y",
+                }
+                agrupado.index = datas_grafico.strftime(rotulos[granularidade])
+                agrupado.index.name = granularidade
+                st.bar_chart(
+                    agrupado.reset_index(),
+                    x=granularidade,
+                    y=list(agrupado.columns),
+                    stack=False,
+                    alt="Receitas e despesas realizadas e previstas no período",
+                )
+
+    with categoria_coluna:
+        with st.container(border=True):
+            st.subheader("Despesas por categoria", anchor=False)
+            st.caption("Inclui movimentações previstas e ocorrências recorrentes.")
+            despesas_categoria = (
+                movimentos_grafico[movimentos_grafico["tipo"] == "Despesa"]
+                .groupby("categoria", as_index=False)["valor_centavos"]
+                .sum()
+                .sort_values("valor_centavos", ascending=False)
+            )
+            if despesas_categoria.empty:
+                st.caption("Nenhuma despesa no período selecionado.")
+            else:
+                despesas_categoria["valor"] = despesas_categoria["valor_centavos"] / 100
+                st.bar_chart(
+                    despesas_categoria,
+                    x="categoria",
+                    y="valor",
+                    horizontal=True,
+                    alt="Despesas realizadas e previstas agrupadas por categoria",
+                )
+
+with aba_movimentacoes:
+    st.subheader("Movimentações", icon=":material/receipt_long:")
+    filtros_coluna, exportar_coluna, backup_coluna = st.columns(
+        [2, 1, 1], vertical_alignment="bottom"
+    )
+    with filtros_coluna:
+        tipos_selecionados = st.pills(
+            "Tipos exibidos",
+            options=TIPOS,
+            default=TIPOS,
+            selection_mode="multi",
+        )
+
+    df_tabela = df_periodo[
+        df_periodo["tipo"].isin(tipos_selecionados or [])
+    ].copy()
+    df_tabela = df_tabela.sort_values(["data", "id"], ascending=[False, False])
+    df_exportacao = pd.concat(
+        [
+            df_tabela[
+                ["data", "descricao", "categoria", "valor_centavos", "tipo", "status"]
+            ],
+            ocorrencias_periodo[
+                ocorrencias_periodo["tipo"].isin(tipos_selecionados or [])
+            ][["data", "descricao", "categoria", "valor_centavos", "tipo", "status"]],
+        ],
+        ignore_index=True,
+    ).sort_values("data", ascending=False).rename(
+        columns={
             "data": "Data",
             "descricao": "Descrição",
             "categoria": "Categoria",
-            "valor_centavos": "Valor",
+            "valor_centavos": "Valor (R$)",
             "tipo": "Tipo",
             "status": "Situação",
-        },
-        alt="Movimentações financeiras no período selecionado",
+        }
     )
+    if not df_exportacao.empty:
+        df_exportacao["Data"] = pd.to_datetime(df_exportacao["Data"]).dt.strftime("%d/%m/%Y")
+        df_exportacao["Valor (R$)"] = df_exportacao["Valor (R$)"] / 100
 
-if not ocorrencias_periodo.empty:
-    with st.expander("Previsões das recorrências", icon=":material/event_repeat:"):
-        exibicao_recorrencias = ocorrencias_periodo[
-            ["data", "descricao", "categoria", "valor_centavos", "tipo"]
-        ].copy()
-        exibicao_recorrencias["data"] = exibicao_recorrencias["data"].dt.strftime(
-            "%d/%m/%Y"
+    with exportar_coluna:
+        st.download_button(
+            "Exportar período",
+            data=df_exportacao.to_csv(index=False).encode("utf-8-sig"),
+            file_name="movimentacoes_fluxo_de_caixa.csv",
+            mime="text/csv",
+            icon=":material/download:",
+            width="stretch",
+            disabled=df_exportacao.empty,
         )
-        exibicao_recorrencias["valor_centavos"] = exibicao_recorrencias[
-            "valor_centavos"
-        ].map(lambda valor_centavos: formatar_moeda(int(valor_centavos)))
-        exibicao_recorrencias = exibicao_recorrencias.rename(
-            columns={
+    with backup_coluna:
+        st.download_button(
+            "Backup completo",
+            data=criar_backup(),
+            file_name=f"backup_fluxo_de_caixa_{date.today():%Y%m%d}.json",
+            mime="application/json",
+            icon=":material/backup:",
+            help="Inclui lançamentos, recorrências, categorias e saldo inicial.",
+            width="stretch",
+        )
+
+    if df_tabela.empty:
+        st.info("Nenhuma movimentação encontrada com os filtros atuais.")
+    else:
+        df_exibicao = df_tabela[
+            ["id", "data", "descricao", "categoria", "valor_centavos", "tipo", "status"]
+        ].copy()
+        df_exibicao["data"] = df_exibicao["data"].dt.strftime("%d/%m/%Y")
+        df_exibicao["valor_centavos"] = df_exibicao["valor_centavos"].map(
+            lambda valor_centavos: formatar_moeda(int(valor_centavos))
+        )
+        st.dataframe(
+            df_exibicao,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "id": st.column_config.NumberColumn("ID", help="Identificador da transação"),
                 "data": "Data",
                 "descricao": "Descrição",
                 "categoria": "Categoria",
                 "valor_centavos": "Valor",
                 "tipo": "Tipo",
+                "status": "Situação",
+            },
+            alt="Movimentações financeiras no período selecionado",
+        )
+
+    if not ocorrencias_periodo.empty:
+        with st.expander("Previsões das recorrências", icon=":material/event_repeat:"):
+            exibicao_recorrencias = ocorrencias_periodo[
+                ["data", "descricao", "categoria", "valor_centavos", "tipo"]
+            ].copy()
+            exibicao_recorrencias["data"] = exibicao_recorrencias["data"].dt.strftime(
+                "%d/%m/%Y"
+            )
+            exibicao_recorrencias["valor_centavos"] = exibicao_recorrencias[
+                "valor_centavos"
+            ].map(lambda valor_centavos: formatar_moeda(int(valor_centavos)))
+            exibicao_recorrencias = exibicao_recorrencias.rename(
+                columns={
+                    "data": "Data",
+                    "descricao": "Descrição",
+                    "categoria": "Categoria",
+                    "valor_centavos": "Valor",
+                    "tipo": "Tipo",
+                }
+            )
+            st.dataframe(
+                exibicao_recorrencias,
+                hide_index=True,
+                width="stretch",
+                alt="Próximas ocorrências das regras recorrentes",
+            )
+
+    if not df.empty:
+        with st.expander("Editar ou excluir lançamentos", icon=":material/edit:"):
+            transacoes_por_id = {
+                int(linha.id): linha for linha in df.itertuples(index=False)
             }
-        )
-        st.dataframe(
-            exibicao_recorrencias,
-            hide_index=True,
-            width="stretch",
-            alt="Próximas ocorrências das regras recorrentes",
-        )
-
-if not df.empty:
-    with st.expander("Editar ou excluir lançamentos", icon=":material/edit:"):
-        transacoes_por_id = {
-            int(linha.id): linha for linha in df.itertuples(index=False)
-        }
-        id_edicao = st.selectbox(
-            "Lançamento",
-            options=list(transacoes_por_id),
-            format_func=lambda identificador: (
-                f"#{identificador} · "
-                f"{transacoes_por_id[identificador].data:%d/%m/%Y} · "
-                f"{transacoes_por_id[identificador].descricao} · "
-                f"{formatar_moeda(int(transacoes_por_id[identificador].valor_centavos))}"
-            ),
-        )
-        transacao_edicao = transacoes_por_id[id_edicao]
-        with st.form(f"form_editar_transacao_{id_edicao}"):
-            data_edicao = st.date_input(
-                "Data do lançamento",
-                value=transacao_edicao.data.date(),
-                key=f"data_edicao_{id_edicao}",
+            id_edicao = st.selectbox(
+                "Lançamento",
+                options=list(transacoes_por_id),
+                format_func=lambda identificador: (
+                    f"#{identificador} · "
+                    f"{transacoes_por_id[identificador].data:%d/%m/%Y} · "
+                    f"{transacoes_por_id[identificador].descricao} · "
+                    f"{formatar_moeda(int(transacoes_por_id[identificador].valor_centavos))}"
+                ),
             )
-            descricao_edicao = st.text_input(
-                "Descrição do lançamento",
-                value=transacao_edicao.descricao,
-                key=f"descricao_edicao_{id_edicao}",
-            )
-            categoria_edicao = st.selectbox(
-                "Categoria do lançamento",
-                categorias_disponiveis,
-                index=categorias_disponiveis.index(transacao_edicao.categoria),
-                key=f"categoria_edicao_{id_edicao}",
-            )
-            valor_edicao = st.number_input(
-                "Valor do lançamento (R$)",
-                min_value=0.0,
-                value=float(Decimal(int(transacao_edicao.valor_centavos)) / 100),
-                step=10.0,
-                format="%.2f",
-                key=f"valor_edicao_{id_edicao}",
-            )
-            tipo_edicao = st.selectbox(
-                "Tipo do lançamento",
-                TIPOS,
-                index=TIPOS.index(transacao_edicao.tipo),
-                key=f"tipo_edicao_{id_edicao}",
-            )
-            status_edicao = st.selectbox(
-                "Situação do lançamento",
-                STATUS,
-                index=STATUS.index(transacao_edicao.status),
-                key=f"status_edicao_{id_edicao}",
-            )
-            salvar_edicao = st.form_submit_button("Salvar alterações")
-        if salvar_edicao:
-            descricao_limpa = descricao_edicao.strip()
-            valor_edicao_em_centavos = centavos_de(valor_edicao)
-            if not descricao_limpa or valor_edicao_em_centavos <= 0:
-                st.error("Informe uma descrição e um valor de pelo menos R$ 0,01.")
-            elif status_edicao == "Realizada" and data_edicao > date.today():
-                st.error("Uma transação futura precisa ser marcada como prevista.")
-            else:
-                salvar_transacao(
-                    data_edicao,
-                    descricao_limpa,
-                    categoria_edicao,
-                    valor_edicao_em_centavos,
-                    tipo_edicao,
-                    status_edicao,
-                    id_edicao,
+            transacao_edicao = transacoes_por_id[id_edicao]
+            with st.form(f"form_editar_transacao_{id_edicao}"):
+                data_edicao = st.date_input(
+                    "Data do lançamento",
+                    value=transacao_edicao.data.date(),
+                    key=f"data_edicao_{id_edicao}",
                 )
-                invalidar_dados()
-                st.toast("Lançamento atualizado.", icon=":material/check:")
-                st.rerun()
+                descricao_edicao = st.text_input(
+                    "Descrição do lançamento",
+                    value=transacao_edicao.descricao,
+                    key=f"descricao_edicao_{id_edicao}",
+                )
+                categoria_edicao = st.selectbox(
+                    "Categoria do lançamento",
+                    categorias_disponiveis,
+                    index=categorias_disponiveis.index(transacao_edicao.categoria),
+                    key=f"categoria_edicao_{id_edicao}",
+                )
+                valor_edicao = st.number_input(
+                    "Valor do lançamento (R$)",
+                    min_value=0.0,
+                    value=float(Decimal(int(transacao_edicao.valor_centavos)) / 100),
+                    step=10.0,
+                    format="%.2f",
+                    key=f"valor_edicao_{id_edicao}",
+                )
+                tipo_edicao = st.selectbox(
+                    "Tipo do lançamento",
+                    TIPOS,
+                    index=TIPOS.index(transacao_edicao.tipo),
+                    key=f"tipo_edicao_{id_edicao}",
+                )
+                status_edicao = st.selectbox(
+                    "Situação do lançamento",
+                    STATUS,
+                    index=STATUS.index(transacao_edicao.status),
+                    key=f"status_edicao_{id_edicao}",
+                )
+                salvar_edicao = st.form_submit_button("Salvar alterações")
+            if salvar_edicao:
+                descricao_limpa = descricao_edicao.strip()
+                valor_edicao_em_centavos = centavos_de(valor_edicao)
+                if not descricao_limpa or valor_edicao_em_centavos <= 0:
+                    st.error("Informe uma descrição e um valor de pelo menos R$ 0,01.")
+                elif status_edicao == "Realizada" and data_edicao > date.today():
+                    st.error("Uma transação futura precisa ser marcada como prevista.")
+                else:
+                    salvar_transacao(
+                        data_edicao,
+                        descricao_limpa,
+                        categoria_edicao,
+                        valor_edicao_em_centavos,
+                        tipo_edicao,
+                        status_edicao,
+                        id_edicao,
+                    )
+                    invalidar_dados()
+                    st.toast("Lançamento atualizado.", icon=":material/check:")
+                    st.rerun()
 
-        confirmar_exclusao = st.checkbox(
-            f"Confirmo a exclusão do lançamento #{id_edicao}"
-        )
-        if st.button(
-            "Excluir lançamento",
-            disabled=not confirmar_exclusao,
-            icon=":material/delete:",
-        ):
-            removidas = deletar_transacao(id_edicao)
-            if removidas:
-                invalidar_dados()
-                st.toast("Lançamento excluído.", icon=":material/check:")
-                st.rerun()
-            else:
-                st.error("O lançamento selecionado não foi encontrado.")
+            confirmar_exclusao = st.checkbox(
+                f"Confirmo a exclusão do lançamento #{id_edicao}"
+            )
+            if st.button(
+                "Excluir lançamento",
+                disabled=not confirmar_exclusao,
+                icon=":material/delete:",
+            ):
+                removidas = deletar_transacao(id_edicao)
+                if removidas:
+                    invalidar_dados()
+                    st.toast("Lançamento excluído.", icon=":material/check:")
+                    st.rerun()
+                else:
+                    st.error("O lançamento selecionado não foi encontrado.")
 
-st.caption("Valores apresentados em reais (BRL).")
+    st.caption("Valores apresentados em reais (BRL).")
