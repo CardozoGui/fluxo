@@ -1,4 +1,3 @@
-Warning: fs was declared with const; use let for reassignable variables.
 import json
 import os
 import sqlite3
