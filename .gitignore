@@ -1,0 +1,17 @@
+# Local financial data and backups
+fluxo_caixa.db
+fluxo_caixa.db-*
+*.sqlite
+*.sqlite3
+backup_fluxo_de_caixa_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets and editor files
+.streamlit/secrets.toml
+.env
+.vscode/
