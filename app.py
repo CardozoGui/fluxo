@@ -550,8 +550,9 @@ with st.sidebar:
 
     if submit:
         descricao_limpa = descricao.strip()
-        if not descricao_limpa or valor <= 0:
-            st.error("Informe uma descrição e um valor maior que zero.")
+        valor_em_centavos = centavos_de(valor)
+        if not descricao_limpa or valor_em_centavos <= 0:
+            st.error("Informe uma descrição e um valor de pelo menos R$ 0,01.")
         elif status == "Realizada" and data_transacao > date.today():
             st.error("Uma transação futura precisa ser marcada como prevista.")
         else:
@@ -559,7 +560,7 @@ with st.sidebar:
                 data_transacao,
                 descricao_limpa,
                 categoria,
-                centavos_de(valor),
+                valor_em_centavos,
                 tipo,
                 status,
             )
@@ -707,8 +708,9 @@ with st.sidebar:
             )
         if salvar_recorrencia:
             descricao_limpa = descricao_recorrencia.strip()
-            if not descricao_limpa or valor_recorrencia <= 0:
-                st.error("Informe uma descrição e um valor maior que zero.")
+            valor_recorrente_em_centavos = centavos_de(valor_recorrencia)
+            if not descricao_limpa or valor_recorrente_em_centavos <= 0:
+                st.error("Informe uma descrição e um valor de pelo menos R$ 0,01.")
             elif not sem_fim and fim_recorrencia < inicio_recorrencia:
                 st.error("A data final deve ser igual ou posterior à inicial.")
             else:
@@ -724,7 +726,7 @@ with st.sidebar:
                             None if sem_fim else fim_recorrencia.isoformat(),
                             descricao_limpa,
                             categoria_recorrencia,
-                            centavos_de(valor_recorrencia),
+                            valor_recorrente_em_centavos,
                             tipo_recorrencia,
                             frequencia,
                         ),
@@ -1686,8 +1688,9 @@ if not df.empty:
             salvar_edicao = st.form_submit_button("Salvar alterações")
         if salvar_edicao:
             descricao_limpa = descricao_edicao.strip()
-            if not descricao_limpa or valor_edicao <= 0:
-                st.error("Informe uma descrição e um valor maior que zero.")
+            valor_edicao_em_centavos = centavos_de(valor_edicao)
+            if not descricao_limpa or valor_edicao_em_centavos <= 0:
+                st.error("Informe uma descrição e um valor de pelo menos R$ 0,01.")
             elif status_edicao == "Realizada" and data_edicao > date.today():
                 st.error("Uma transação futura precisa ser marcada como prevista.")
             else:
@@ -1695,7 +1698,7 @@ if not df.empty:
                     data_edicao,
                     descricao_limpa,
                     categoria_edicao,
-                    centavos_de(valor_edicao),
+                    valor_edicao_em_centavos,
                     tipo_edicao,
                     status_edicao,
                     id_edicao,
