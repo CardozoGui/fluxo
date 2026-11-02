@@ -1,3 +1,4 @@
+import hmac
 import json
 import os
 import sqlite3
@@ -26,6 +27,39 @@ st.set_page_config(
     page_icon=":material/account_balance_wallet:",
     layout="wide",
 )
+
+
+def exigir_login() -> None:
+    """Pede uma senha compartilhada antes de abrir as funções do app."""
+    senha_configurada = os.environ.get("FLUXO_CAIXA_SENHA", "")
+    if not senha_configurada:
+        senha_configurada = str(st.secrets.get("login", {}).get("senha", ""))
+
+    if not senha_configurada:
+        st.title("Acesso ao fluxo de caixa")
+        st.error(
+            "Defina a senha em [login].senha nos Secrets do Streamlit "
+            "ou na variável FLUXO_CAIXA_SENHA."
+        )
+        st.stop()
+
+    if st.session_state.get("autenticado", False):
+        return
+
+    st.title("Acesso ao fluxo de caixa")
+    with st.form("form_login"):
+        senha_digitada = st.text_input("Senha", type="password")
+        entrar = st.form_submit_button("Entrar", type="primary")
+
+    if entrar:
+        if hmac.compare_digest(
+            senha_digitada.encode("utf-8"), senha_configurada.encode("utf-8")
+        ):
+            st.session_state["autenticado"] = True
+            st.rerun()
+        st.error("Senha incorreta.")
+
+    st.stop()
 
 
 def criar_tabela_transacoes(conn: sqlite3.Connection) -> None:
@@ -520,6 +554,7 @@ def invalidar_dados() -> None:
     carregar_dados.clear()
 
 
+exigir_login()
 init_db()
 df = carregar_dados()
 df_recorrencias = carregar_recorrencias()
@@ -530,6 +565,9 @@ periodo_padrao = periodo_inicial(df)
 with st.sidebar:
     st.title("Fluxo de caixa", anchor=False)
     st.caption("Controle financeiro")
+    if st.button("Sair", icon=":material/logout:", width="stretch"):
+        st.session_state["autenticado"] = False
+        st.rerun()
 
     st.subheader("Nova transação", divider="gray")
     with st.form("form_transacao", clear_on_submit=True):
