@@ -17,6 +17,7 @@ DB_PATH = Path(
         str(Path(__file__).resolve().with_name("fluxo_caixa.db")),
     )
 )
+LOGIN_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "performance-logo.jpeg"
 CATEGORIAS_PADRAO = ["Vendas", "Serviços", "Aluguel", "Salários", "Marketing", "Outros"]
 TIPOS = ["Receita", "Despesa"]
 STATUS = ["Realizada", "Prevista"]
@@ -35,29 +36,35 @@ def exigir_login() -> None:
     if not senha_configurada:
         senha_configurada = str(st.secrets.get("login", {}).get("senha", ""))
 
-    if not senha_configurada:
-        st.title("Acesso ao fluxo de caixa")
-        st.error(
-            "Defina a senha em [login].senha nos Secrets do Streamlit "
-            "ou na variável FLUXO_CAIXA_SENHA."
-        )
-        st.stop()
-
     if st.session_state.get("autenticado", False):
         return
 
-    st.title("Acesso ao fluxo de caixa")
-    with st.form("form_login"):
-        senha_digitada = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar", type="primary")
+    _, coluna_login, _ = st.columns([1, 2, 1])
+    with coluna_login:
+        st.image(
+            str(LOGIN_LOGO_PATH),
+            alt="Performance: Natação & Estimulação",
+            width="stretch",
+        )
+        st.title("Acesso ao fluxo de caixa")
 
-    if entrar:
-        if hmac.compare_digest(
-            senha_digitada.encode("utf-8"), senha_configurada.encode("utf-8")
-        ):
-            st.session_state["autenticado"] = True
-            st.rerun()
-        st.error("Senha incorreta.")
+        if not senha_configurada:
+            st.error(
+                "Defina a senha em [login].senha nos Secrets do Streamlit "
+                "ou na variável FLUXO_CAIXA_SENHA."
+            )
+        else:
+            with st.form("form_login"):
+                senha_digitada = st.text_input("Senha", type="password")
+                entrar = st.form_submit_button("Entrar", type="primary")
+
+            if entrar:
+                if hmac.compare_digest(
+                    senha_digitada.encode("utf-8"), senha_configurada.encode("utf-8")
+                ):
+                    st.session_state["autenticado"] = True
+                    st.rerun()
+                st.error("Senha incorreta.")
 
     st.stop()
 
