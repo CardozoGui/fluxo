@@ -40,13 +40,24 @@ def exigir_login() -> None:
         return
 
     _, coluna_login, _ = st.columns([1, 2, 1])
-    with coluna_login:
+    with coluna_login.container(border=True):
         st.image(
             str(LOGIN_LOGO_PATH),
             alt="Performance: Natação & Estimulação",
             width="stretch",
         )
-        st.title("Acesso ao fluxo de caixa")
+        st.html(
+            """
+            <div aria-hidden="true" style="display:flex;height:6px;overflow:hidden;
+                border-radius:999px;margin:0.4rem 0 1rem">
+              <span style="flex:4;background:#5b8da2"></span>
+              <span style="flex:2;background:#d6a949"></span>
+              <span style="flex:4;background:#a13b4a"></span>
+            </div>
+            """
+        )
+        st.markdown("## :blue[Acesso ao fluxo de caixa]")
+        st.caption("Controle financeiro da Performance")
 
         if not senha_configurada:
             st.error(
